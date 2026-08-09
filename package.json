@@ -1,0 +1,14 @@
+{
+  "name": "codex-one-click-skin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Interactive one-click themes for the Windows Codex desktop app",
+  "scripts": {
+    "test": "powershell -NoProfile -ExecutionPolicy Bypass -File ./tests/run-tests.ps1",
+    "check:themes": "node ./scripts/injector.mjs --check-payload --theme-dir ./presets/preset-codex-1907-deep"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
