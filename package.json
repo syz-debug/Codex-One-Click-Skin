@@ -1,6 +1,6 @@
 {
   "name": "codex-one-click-skin",
-  "version": "1.0.0",
+  "version": "1.8.0",
   "private": true,
   "description": "Interactive one-click themes for the Windows Codex desktop app",
   "scripts": {

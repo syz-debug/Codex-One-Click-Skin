@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const bundledPresetsRoot = path.join(root, "presets");
-const SKIN_VERSION = "1.7.18";
+const SKIN_VERSION = "1.8.0";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const BROWSER_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/;
 const THEME_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
@@ -448,7 +448,11 @@ async function probeSession(session) {
   return session.evaluate(`(() => {
     const markers = {
       shell: Boolean(document.querySelector('main.main-surface, [class*="MainContentSurface"]')),
-      sidebar: Boolean(document.querySelector('aside.app-shell-left-panel')),
+      sidebar: Boolean(document.querySelector([
+        'aside.app-shell-left-panel',
+        'button[data-app-shell-sidebar-trigger="true"]',
+        'aside[data-testid="app-shell-floating-left-panel"]',
+      ].join(', '))),
       composer: Boolean(document.querySelector('.composer-surface-chrome, [class*="ComposerLayoutRoot"], [class*="RichTextInput"]')),
       main: Boolean(document.querySelector('[role="main"]')),
     };
@@ -504,8 +508,8 @@ async function removeFromSession(session) {
     if (state?.cleanup) return state.cleanup();
     document.documentElement?.classList.remove('codex-dream-skin');
     document.documentElement?.style.removeProperty('--dream-art');
-    document.querySelectorAll('.dream-home').forEach((node) => node.classList.remove('dream-home'));
-    document.querySelectorAll('.dream-home-shell').forEach((node) => node.classList.remove('dream-home-shell'));
+    document.querySelectorAll('.dream-skin-home').forEach((node) => node.classList.remove('dream-skin-home'));
+    document.querySelectorAll('.dream-skin-home-shell').forEach((node) => node.classList.remove('dream-skin-home-shell'));
     document.getElementById('codex-dream-skin-style')?.remove();
     document.getElementById('codex-dream-skin-chrome')?.remove();
     delete window.__CODEX_DREAM_SKIN_STATE__;
@@ -517,8 +521,8 @@ async function verifyRemovedSession(session) {
   return session.evaluate(`(() =>
     !document.documentElement.classList.contains('codex-dream-skin') &&
     !document.documentElement.style.getPropertyValue('--dream-art') &&
-    !document.querySelector('.dream-home') &&
-    !document.querySelector('.dream-home-shell') &&
+    !document.querySelector('.dream-skin-home') &&
+    !document.querySelector('.dream-skin-home-shell') &&
     !document.getElementById('codex-dream-skin-style') &&
     !document.getElementById('codex-dream-skin-chrome') &&
     !window.__CODEX_DREAM_SKIN_STATE__
@@ -532,11 +536,13 @@ async function verifySession(session) {
       const r = node.getBoundingClientRect();
       return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
     };
-    const home = document.querySelector('.dream-home');
+    const home = document.querySelector('.dream-skin-home');
     const suggestions = home?.querySelector('.group\\\\/home-suggestions') ?? null;
-    const cards = suggestions ? [...suggestions.querySelectorAll('button')].map(box) : [];
+    const cards = suggestions ? [...suggestions.querySelectorAll('button')].map(box)
+      .filter((card) => card && card.width > 0 && card.height > 0) : [];
     const result = {
       installed: document.documentElement.classList.contains('codex-dream-skin'),
+      skinMode: document.documentElement.getAttribute('data-dream-skin-mode') || 'classic',
       version: window.__CODEX_DREAM_SKIN_STATE__?.version ?? null,
       expectedVersion: ${JSON.stringify(SKIN_VERSION)},
       stylePresent: Boolean(document.getElementById('codex-dream-skin-style')),
@@ -544,6 +550,7 @@ async function verifySession(session) {
       chromePointerEvents: getComputedStyle(document.getElementById('codex-dream-skin-chrome') || document.body).pointerEvents,
       homePresent: Boolean(home),
       suggestionsPresent: Boolean(suggestions),
+      homeTitle: box(home?.querySelector('[data-feature="game-source"]')),
       hero: box(home?.firstElementChild?.firstElementChild?.firstElementChild),
       cards,
       composer: box(document.querySelector('.composer-surface-chrome, [class*="ComposerLayoutRoot"], [class*="RichTextInput"]')),
@@ -557,8 +564,12 @@ async function verifySession(session) {
     result.pass = result.installed && result.version === result.expectedVersion &&
       result.stylePresent && result.chromePresent &&
       result.chromePointerEvents === 'none' && Boolean(result.composer) && Boolean(result.sidebar) &&
-      (!result.homePresent || (Boolean(result.hero) &&
-        (!result.suggestionsPresent || (result.cards.length >= 2 && result.cards.length <= 4))));
+      (!result.homePresent || (result.skinMode === 'qq2007'
+        ? (Boolean(result.homeTitle) && result.suggestionsPresent &&
+          result.cards.length >= 1 && result.cards.length <= 4)
+        : (Boolean(result.hero) && (!result.suggestionsPresent ||
+          (result.cards.length >= 1 && result.cards.length <= 4))))) &&
+      !result.documentOverflow.x;
     return result;
   })()`);
 }

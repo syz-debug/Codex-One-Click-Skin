@@ -1,15 +1,20 @@
-# Codex 一键换肤
+# Codex One-Click Skin
 
-Windows Codex 桌面端的可交互主题工具。它把图片和主题参数注入 Codex 渲染层，保留原生输入框、图片附件、模型菜单、导航和任务操作；不会把整张界面截图盖在应用上。
+Windows Codex 桌面端的一键换肤工具。它通过可逆的渲染层注入应用图片主题，同时保留 Codex 的真实输入框、附件、导航、任务操作、菜单和侧栏交互。
+
+![Codex One-Click Skin QQ2007 主题展示](docs/images/codex-one-click-skin-qq2007.png)
+
+当前版本：`v1.8.0`
 
 ## 功能
 
-- 内置 QQ 2007、樱粉晨曦、午夜极光、赛博霓虹、森野薄雾和琥珀黄昏主题。
-- 从 JPG、PNG 或 WebP 图片生成自适应主题，并立即应用。
-- 在 Codex 顶部导航栏的“换肤”菜单中实时切换全部已加载主题。
-- 一键返回 Codex 官方外观，随时重新进入当前主题。
-- 监听 Codex 页面重载并自动重新注入。
-- 安装、验证、恢复全程不修改 `WindowsApps`、`app.asar`、应用签名、账号凭据或 API 配置。
+- 内置 QQ2007 复古版、樱粉晨曦、午夜极光、赛博霓虹、森野薄雾和琥珀黄昏主题。
+- 从 JPG、PNG 或 WebP 图片生成主题，并立即应用到当前 Codex 会话。
+- 在顶部“换肤”菜单中切换主题或返回 Codex 官方外观。
+- 保留原生输入、图片附件、审阅、模型菜单、项目导航和任务操作能力。
+- 支持常驻侧栏、折叠状态、鼠标临时栏、摘要栏和附件二级面板。
+- Codex 页面重载或路由变化后自动恢复当前主题。
+- 安装、验证和恢复均不修改 `WindowsApps`、`app.asar`、应用签名、账号凭据或 API 配置。
 
 ## 环境要求
 
@@ -18,13 +23,13 @@ Windows Codex 桌面端的可交互主题工具。它把图片和主题参数注
 - Node.js 22 或更高版本
 - Windows PowerShell 5.1 或 PowerShell 7
 
-## 安装
+## 快速开始
 
 1. 关闭 Codex，双击 `install.cmd`。
 2. 桌面会出现“Codex 一键换肤”和“Codex 一键换肤 - 启动”。
 3. 打开“Codex 一键换肤”，选择内置主题或导入自己的图片。
 
-如果电脑上安装过旧版 Codex QQ 2007，请先用旧项目的恢复脚本还原官方外观，再安装本项目；安装器会阻止覆盖仍需恢复的旧备份。
+如果安装过其他非官方皮肤，请先使用对应恢复流程还原 Codex 官方外观，再安装本项目。
 
 也可以在 PowerShell 中运行：
 
@@ -44,9 +49,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\import-theme.ps1 `
   -ImagePath C:\Pictures\my-skin.png -Name "我的主题"
 ```
 
-图片会复制到 `%LOCALAPPDATA%\CodexOneClickSkin\themes`。渲染器会从图片分析色彩；控件仍是 Codex 的真实控件，不会变成不可点击的贴图。
+图片会复制到 `%LOCALAPPDATA%\CodexOneClickSkin\themes`。渲染器会分析图片色彩并生成主题参数，界面控件仍由 Codex 原生 DOM 提供。
 
-## 命令
+## 常用命令
 
 ```powershell
 # 查看主题
@@ -70,7 +75,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\import-theme.ps1 `
 
 ## 主题格式
 
-每个主题是 `presets/<id>/` 或本地主题库中的一个目录：
+每个主题位于 `presets/<id>/` 或本地主题库中的独立目录：
 
 ```text
 theme.json
@@ -92,7 +97,20 @@ qq-show.png     # 可选
 }
 ```
 
-主题 id 只允许英文字母、数字、下划线和连字符。图片上限 16 MB。载荷构建器会检查文件名、扩展名、图片签名、大小和重复 id。
+主题 id 只允许英文字母、数字、下划线和连字符。单张图片上限为 16 MB，载荷构建器会检查文件名、扩展名、图片签名、大小和重复 id。
+
+## 质量约束
+
+项目对 `1438×600`、`1282×720`、`960×720` 和 `720×800` 四档视口执行自动布局检查。发布版本必须满足：
+
+- 标题栏、工具栏、内容区和状态栏互不遮挡。
+- 常驻侧栏、临时栏、摘要栏和附件栏均保持在内容边界内。
+- 输入框高度稳定，输入、附件和提交操作不引发布局跳动。
+- 标签、菜单、附件、展开、收回和二级控件保持原生交互。
+- 所有可见按钮的中心点必须命中对应的真实控件。
+- `hover`、键盘焦点、展开、选中和按下状态必须有一致的视觉反馈。
+
+完整工程约束见 [质量与交互约束](docs/quality-constraints.md)。
 
 ## 安全边界
 
@@ -100,12 +118,14 @@ qq-show.png     # 可选
 
 恢复操作会停止注入进程、移除实时样式、关闭调试会话并重新打开官方 Codex。用户主题与选择记录位于 `%LOCALAPPDATA%\CodexOneClickSkin`。
 
-## 测试
+## 验证
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-tests.ps1
+node .\scripts\injector.mjs --check-payload --theme-dir .\presets\preset-codex-1907-deep
+node .\scripts\layout-check.mjs 9335
 ```
 
-## 来源与许可
+## 许可
 
-项目基于 [zhangjanice66/Codex-QQ-2007](https://github.com/zhangjanice66/Codex-QQ-2007) 的主题结构和可逆注入思路，并包含本次 Windows 适配与多主题交互实现。详见 [NOTICE.md](NOTICE.md)。代码按 MIT License 发布。
+代码按 MIT License 发布。Codex 和 OpenAI 是其各自权利人的商标；本项目是非官方界面定制工具，不包含或重新分发 Codex 应用程序。
