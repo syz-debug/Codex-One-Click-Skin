@@ -90,6 +90,7 @@
   if (previous?.analysisTimer) clearTimeout(previous.analysisTimer);
   if (previous?.resizeHandler) window.removeEventListener("resize", previous.resizeHandler);
   previous?.cancelFrameLayout?.();
+  previous?.cancelNativeTabLayout?.();
   previous?.cancelOpenLocationSettle?.();
   previous?.disposeInteractions?.();
   if (previous?.mediaHandler && previous?.mediaQuery) {
@@ -576,6 +577,8 @@
     'button[aria-label="切换置顶摘要"]',
     'button[aria-label="Toggle pinned summary"]',
   ].join(", ");
+  const NATIVE_TAB_PANEL_SELECTOR = 'aside:not(.app-shell-left-panel):not(.ds2007-friends):has([role="tab"])';
+  const NATIVE_TAB_TOOLBAR_SELECTOR = '.h-toolbar:has([role="tablist"])';
   const interactionBindings = [];
   const bindInteraction = (target, type, handler, marker, options) => {
     if (!target?.addEventListener || target.dataset?.[marker]) return;
@@ -860,26 +863,6 @@
     }
     if (!dock) return;
     setAttribute(dock, "data-ds2007-native-dock", portal ? "true" : "pinned");
-    if (!portal) return;
-    const keepEnvironmentDockOpen = (event) => {
-      const dock = document.querySelector?.('[data-ds2007-native-dock="true"]');
-      const target = event.detail?.originalEvent?.target;
-      if (dock && (!target || !dock.contains?.(target))) event.preventDefault?.();
-    };
-    bindInteraction(
-      root,
-      "dismissableLayer.pointerDownOutside",
-      keepEnvironmentDockOpen,
-      "ds2007NativeDockPointerBound",
-      true,
-    );
-    bindInteraction(
-      root,
-      "dismissableLayer.focusOutside",
-      keepEnvironmentDockOpen,
-      "ds2007NativeDockFocusBound",
-      true,
-    );
   };
   const clearNativeRightDock = (root) => {
     for (const candidate of document.querySelectorAll?.("[data-ds2007-native-dock]") || []) {
@@ -983,13 +966,73 @@
       if (destination.dataset) destination.dataset.ds2007GlobalNavSource = label;
     }
   };
+  const SIDEBAR_PEEK_HOST_SELECTOR =
+    '[data-pip-obstacle="app-shell-floating-left-panel"]:has(> aside[data-testid="app-shell-floating-left-panel"])';
+  const markSidebarPeekSurface = (subtree = document) => {
+    const hosts = new Set();
+    if (subtree.matches?.(SIDEBAR_PEEK_HOST_SELECTOR)) hosts.add(subtree);
+    const closestHost = subtree.closest?.(SIDEBAR_PEEK_HOST_SELECTOR);
+    if (closestHost) hosts.add(closestHost);
+    for (const host of subtree.querySelectorAll?.(SIDEBAR_PEEK_HOST_SELECTOR) || []) hosts.add(host);
+    let firstSidebar = null;
+    for (const host of hosts) {
+      const sidebar = host.querySelector?.(":scope > aside");
+      if (!sidebar) continue;
+      firstSidebar ||= sidebar;
+      host.dataset.ds2007SidebarPeekHost = "true";
+      const nativeHeader = document.querySelector?.('[data-pip-obstacle="app-shell-header"]');
+      const nativeHeaderBottom = nativeHeader?.getBoundingClientRect?.().bottom;
+      if (Number.isFinite(nativeHeaderBottom) && nativeHeaderBottom > 0) {
+        setStyleProperty(host, "--ds2007-sidebar-peek-top", `${Math.ceil(nativeHeaderBottom)}px`);
+      }
+      sidebar.classList.add("app-shell-left-panel", "ds2007-sidebar-peek");
+      sidebar.dataset.ds2007SyntheticSidebarClass = "true";
+      styleSidebarSubtree(sidebar);
+      markPrimaryNavSources(sidebar);
+    }
+    return firstSidebar;
+  };
   const syncPrimaryNavToolbar = (sidebar, toolbar) => {
     for (const trigger of toolbar?.querySelectorAll?.("button[data-nav]") || []) {
-      const destination = findPrimaryNavDestination(sidebar, trigger.getAttribute("data-nav"));
-      trigger.hidden = !destination;
-      if (destination) trigger.removeAttribute?.("aria-disabled");
-      else trigger.setAttribute?.("aria-disabled", "true");
+      trigger.hidden = false;
+      trigger.removeAttribute?.("aria-disabled");
     }
+  };
+
+  let primaryNavRequestId = 0;
+  const activatePrimaryNav = (label) => {
+    const requestId = ++primaryNavRequestId;
+    const deadline = now() + 4000;
+    let sidebarRequested = false;
+    let activityCloseRequested = false;
+    let sidebarReadyAt = 0;
+    let activityReadyAt = 0;
+    const attempt = () => {
+      if (requestId !== primaryNavRequestId || window[DISABLED_KEY]) return;
+      const sidebar = document.querySelector("aside.app-shell-left-panel:not(.ds2007-sidebar-peek)");
+      const activityToggle = sidebar?.querySelector?.('button[aria-pressed="true"]');
+      const timestamp = now();
+      if (sidebar && timestamp < sidebarReadyAt) {
+        // Let Codex finish restoring the persistent sidebar state first.
+      } else if (activityToggle && !activityCloseRequested) {
+        activityCloseRequested = true;
+        activityReadyAt = timestamp + 500;
+        activityToggle.click?.();
+      } else if (timestamp >= activityReadyAt) {
+        const destination = findPrimaryNavDestination(sidebar, label);
+        if (destination) {
+          destination.click?.();
+          return;
+        }
+      }
+      if (!sidebar && !sidebarRequested) {
+        sidebarRequested = true;
+        sidebarReadyAt = timestamp + 500;
+        document.querySelector?.('button[data-app-shell-sidebar-trigger="true"]')?.click?.();
+      }
+      if (now() < deadline) setTimeout(attempt, 100);
+    };
+    attempt();
   };
 
   const cleanupLegacySidebarArtifacts = (sidebar) => {
@@ -1049,9 +1092,16 @@
   };
 
   let frameLayoutTimer = null;
+  let nativeTabLayoutFrame = null;
   const cancelFrameLayout = () => {
     if (frameLayoutTimer !== null) clearTimeout(frameLayoutTimer);
     frameLayoutTimer = null;
+  };
+  const cancelNativeTabLayout = () => {
+    if (nativeTabLayoutFrame !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(nativeTabLayoutFrame);
+    }
+    nativeTabLayoutFrame = null;
   };
   const syncFrameLayout = (shellMain, chrome) => {
     metrics.layoutReads += 1;
@@ -1074,12 +1124,82 @@
     setStyleProperty(chrome, "--ds2007-title-safe-left", `${safeLeft}px`);
     setStyleProperty(chrome, "--ds2007-title-safe-right", `${safeRight}px`);
   };
+  const syncSidebarVisibility = (root = document.documentElement) => {
+    const sidebar = document.querySelector("aside.app-shell-left-panel:not(.ds2007-sidebar-peek)");
+    const rect = sidebar?.getBoundingClientRect?.();
+    const style = sidebar && typeof window.getComputedStyle === "function"
+      ? window.getComputedStyle(sidebar) : null;
+    const visible = Boolean(sidebar && rect && rect.width > 32 && rect.height > 0 && rect.right > 0 &&
+      (!style || (style.display !== "none" && style.visibility !== "hidden")));
+    setAttribute(root, "data-ds2007-sidebar-visible", visible ? "true" : "false");
+  };
+  const syncNativeTabChrome = (shellMain) => {
+    const panels = [...(shellMain?.querySelectorAll?.(NATIVE_TAB_PANEL_SELECTOR) || [])];
+    const activePanel = panels.find((panel) => {
+      const rect = panel.getBoundingClientRect?.();
+      return rect && rect.width > 0 && rect.height > 0;
+    }) || null;
+    for (const panel of document.querySelectorAll?.('[data-ds2007-native-tabs="true"]') || []) {
+      if (panel !== activePanel) panel.removeAttribute?.("data-ds2007-native-tabs");
+    }
+    for (const toolbar of document.querySelectorAll?.('[data-ds2007-native-tab-toolbar="true"]') || []) {
+      if (toolbar !== activePanel?.querySelector?.(NATIVE_TAB_TOOLBAR_SELECTOR)) {
+        toolbar.removeAttribute?.("data-ds2007-native-tab-toolbar");
+      }
+    }
+    if (!activePanel) {
+      cancelNativeTabLayout();
+      return false;
+    }
+
+    setAttribute(activePanel, "data-ds2007-native-tabs", "true");
+    const toolbar = activePanel.querySelector?.(NATIVE_TAB_TOOLBAR_SELECTOR);
+    if (toolbar) setAttribute(toolbar, "data-ds2007-native-tab-toolbar", "true");
+
+    const nativeHeader = shellMain?.querySelector?.(':scope > header.pointer-events-none.fixed[class*="h-toolbar"]');
+    const sidebarTogglePattern = /^(?:\u663e\u793a|\u9690\u85cf|\u663e\u793a\s*\/\s*\u9690\u85cf)(?:\u4fa7\u8fb9\u680f|\u8fb9\u680f)$|^(?:show|hide|show\s*\/\s*hide) sidebar$/i;
+    const sidebarToggles = [...(nativeHeader?.querySelectorAll?.("button[aria-label]") || [])]
+      .filter((button) => sidebarTogglePattern.test(button.getAttribute?.("aria-label") || ""));
+    const visibleToggle = sidebarToggles
+      .map((button) => ({ button, rect: button.getBoundingClientRect?.() }))
+      .filter(({ rect }) => rect && rect.width > 0 && rect.height > 0 && rect.right > 0)
+      .sort((left, right) => right.rect.right - left.rect.right)[0]?.button || sidebarToggles.at(-1) || null;
+    for (const button of document.querySelectorAll?.('[data-ds2007-native-sidebar-toggle="true"]') || []) {
+      if (button !== visibleToggle) button.removeAttribute?.("data-ds2007-native-sidebar-toggle");
+    }
+    if (visibleToggle) setAttribute(visibleToggle, "data-ds2007-native-sidebar-toggle", "true");
+
+    if (!toolbar || nativeTabLayoutFrame !== null || typeof requestAnimationFrame !== "function") return true;
+    nativeTabLayoutFrame = requestAnimationFrame(() => {
+      nativeTabLayoutFrame = null;
+      if (!toolbar.isConnected) return;
+      const scroller = toolbar.querySelector?.(':scope > div:has([role="tablist"])');
+      const selectedTab = toolbar.querySelector?.('[role="tab"][aria-selected="true"]');
+      const selectedShell = selectedTab?.closest?.('.group\\/tab') || selectedTab;
+      if (!scroller || !selectedShell) return;
+      const scrollerRect = scroller.getBoundingClientRect?.();
+      const selectedRect = selectedShell.getBoundingClientRect?.();
+      const stickyAction = [...(scroller.querySelectorAll?.('button:not([role="tab"])') || [])]
+        .find((button) => !button.hasAttribute?.("data-app-shell-tab-close-button"));
+      const actionRect = stickyAction?.getBoundingClientRect?.();
+      if (!scrollerRect || !selectedRect) return;
+      const safeLeft = scrollerRect.left + 2;
+      const safeRight = Math.min(scrollerRect.right, actionRect?.left || scrollerRect.right) - 4;
+      if (selectedRect.right > safeRight + 1) {
+        scroller.scrollLeft += selectedRect.right - safeRight;
+      } else if (selectedRect.left < safeLeft - 1) {
+        scroller.scrollLeft -= safeLeft - selectedRect.left;
+      }
+    });
+    return true;
+  };
   const scheduleFrameLayout = () => {
     if (frameLayoutTimer !== null) return;
     frameLayoutTimer = setTimeout(() => {
       frameLayoutTimer = null;
       const shellMain = document.querySelector("main.main-surface") || document.querySelector("main");
       const chrome = document.getElementById(CHROME_ID);
+      syncSidebarVisibility();
       if (shellMain && chrome) syncFrameLayout(shellMain, chrome);
     }, 64);
   };
@@ -1158,6 +1278,8 @@
     if (!root) return;
     shell ||= root.getAttribute(SHELL_ATTR) || resolvedShell();
     const shellMain = document.querySelector("main.main-surface") || document.querySelector("main");
+    markSidebarPeekSurface(document);
+    syncSidebarVisibility(root);
     const homeIndicator = document.querySelector('[data-testid="home-icon"]');
     const home = homeIndicator?.closest('[role="main"]') ||
       [...document.querySelectorAll('[role="main"]')].find((candidate) =>
@@ -1168,7 +1290,11 @@
     }
     if (home) home.classList.add("dream-skin-home");
     const homeUtilityBars = new Set(home
-      ? home.querySelectorAll('[class*="_homeUtilityBar_"]')
+      ? home.querySelectorAll([
+        '[data-composer-home-utility-bar-position="above"][data-composer-placement="home"]',
+        '[class*="_homeUtilityBar_"]',
+        '[class*="_HomeUtilityBar_"]',
+      ].join(", "))
       : []);
     for (const candidate of document.querySelectorAll(".dream-skin-home-utility")) {
       if (!homeUtilityBars.has(candidate)) candidate.classList.remove("dream-skin-home-utility");
@@ -1176,6 +1302,7 @@
     for (const candidate of homeUtilityBars) candidate.classList.add("dream-skin-home-utility");
 
     if (!shellMain || !document.body) return;
+    syncNativeTabChrome(shellMain);
     shellMain.classList.toggle("dream-skin-home-shell", Boolean(home));
     let chrome = document.getElementById(CHROME_ID);
     if (chrome && chrome.dataset.ds2007Revision !== "26") {
@@ -1297,7 +1424,7 @@
       }
       chromeParts.qqShowMedia.dataset.qqShowSource = "theme";
     }
-    const sidebar = document.querySelector("aside.app-shell-left-panel");
+    const sidebar = document.querySelector("aside.app-shell-left-panel:not(.ds2007-sidebar-peek)");
     bindInteraction(chromeParts.toolbar, "click", (event) => {
       const trigger = event.target?.closest?.('button[data-nav], button[data-action="skin-menu"]');
       if (!trigger) return;
@@ -1308,15 +1435,7 @@
         return;
       }
       const nav = trigger.getAttribute("data-nav");
-      const destination = findPrimaryNavDestination(
-        document.querySelector("aside.app-shell-left-panel"),
-        nav,
-      );
-      if (!destination) {
-        trigger.hidden = true;
-        return;
-      }
-      destination.click?.();
+      activatePrimaryNav(nav);
     }, "bridgeBound");
     bindSkinMenuContents(chromeParts.skinMenu);
     syncSkinMenuSelection();
@@ -1468,11 +1587,27 @@
     document.querySelectorAll(".dream-skin-home-shell").forEach((node) => node.classList.remove("dream-skin-home-shell"));
     document.querySelectorAll(".dream-skin-home-utility").forEach((node) => node.classList.remove("dream-skin-home-utility"));
     document.querySelectorAll(".ds2007-app-root").forEach((node) => node.classList.remove("ds2007-app-root"));
+    document.querySelectorAll('[data-ds2007-native-tabs], [data-ds2007-native-tab-toolbar], [data-ds2007-native-sidebar-toggle]')
+      .forEach((node) => {
+        node.removeAttribute?.("data-ds2007-native-tabs");
+        node.removeAttribute?.("data-ds2007-native-tab-toolbar");
+        node.removeAttribute?.("data-ds2007-native-sidebar-toggle");
+      });
+    document.querySelectorAll('[data-ds2007-sidebar-peek-host="true"]')
+      .forEach((node) => {
+        node.removeAttribute("data-ds2007-sidebar-peek-host");
+        node.style.removeProperty("--ds2007-sidebar-peek-top");
+      });
+    document.querySelectorAll('[data-ds2007-synthetic-sidebar-class="true"]').forEach((node) => {
+      node.classList.remove("app-shell-left-panel", "ds2007-sidebar-peek");
+      node.removeAttribute("data-ds2007-synthetic-sidebar-class");
+    });
     document.querySelectorAll(".ds2007-conversation-label, .ds2007-pinned-panel, .ds2007-context-menu")
       .forEach((node) => node.remove());
     document.querySelectorAll('[data-ds2007-open-location-source="true"]')
       .forEach(clearOpenLocationSource);
     cancelFrameLayout();
+    cancelNativeTabLayout();
     cancelOpenLocationSettle();
     document.querySelectorAll(".ds2007-toolbar-duplicate, .ds2007-project-entry, .ds2007-pinned-source, .ds2007-section-label, [data-qq2007-styled], [data-qq2007-toolbar-duplicate], [data-ds2007-context-bound], [data-ds2007-collapse-bound], [data-ds2007-global-nav-source]")
       .forEach(clearSidebarMarker);
@@ -1608,7 +1743,7 @@
     }
     let routeChanged = false;
     let frameChanged = false;
-    const routeSelector = `main.main-surface, [role="main"], aside.app-shell-left-panel, header.app-header-tint, ${NATIVE_RIGHT_PANEL_SELECTOR}, ${NATIVE_RIGHT_SIGNAL_SELECTOR}, ${NATIVE_RIGHT_TOGGLE_SELECTOR}`;
+    const routeSelector = `main.main-surface, [role="main"], aside.app-shell-left-panel, header.app-header-tint, ${NATIVE_RIGHT_PANEL_SELECTOR}, ${NATIVE_RIGHT_SIGNAL_SELECTOR}, ${NATIVE_RIGHT_TOGGLE_SELECTOR}, ${NATIVE_TAB_PANEL_SELECTOR}, ${NATIVE_TAB_TOOLBAR_SELECTOR}`;
     const routeContextSelector = 'main.main-surface > header.app-header-tint, .group\\/project-selector, ' +
       'aside.app-shell-left-panel [data-app-action-sidebar-thread-row]';
     for (const record of records) {
@@ -1636,8 +1771,19 @@
           codexPetSnapshot = undefined;
           routeChanged = true;
         }
+        markSidebarPeekSurface(node);
         styleSidebarSubtree(node);
         styleComposerSubtree(node);
+        const nativeTabMount = node.matches?.(NATIVE_TAB_PANEL_SELECTOR) ||
+          node.matches?.(NATIVE_TAB_TOOLBAR_SELECTOR) ||
+          node.closest?.(NATIVE_TAB_PANEL_SELECTOR) ||
+          node.querySelector?.(NATIVE_TAB_PANEL_SELECTOR) ||
+          node.querySelector?.(NATIVE_TAB_TOOLBAR_SELECTOR);
+        if (nativeTabMount) {
+          const shellMain = document.querySelector("main.main-surface") || document.querySelector("main");
+          syncNativeTabChrome(shellMain);
+          routeChanged = true;
+        }
         const sidebar = node.matches?.("aside.app-shell-left-panel")
           ? node
           : node.closest?.("aside.app-shell-left-panel") || node.querySelector?.("aside.app-shell-left-panel");
@@ -1680,6 +1826,7 @@
     mediaHandler,
     disposeInteractions,
     cancelFrameLayout,
+    cancelNativeTabLayout,
     cancelOpenLocationSettle,
     artUrl,
     installToken,
